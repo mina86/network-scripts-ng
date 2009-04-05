@@ -1,0 +1,90 @@
+network-scripts-ng
+A replacement for Slackware's network-scripts package
+
+Written by Michal Nazarewicz (mina86/AT/mina86.com)
+        with some parts taken from original network-scripts package
+
+
+Overview
+
+  The original Slackware's network scripts are not very flexible or
+  customisable.  If one wants to do something more then set static IP
+  address or DHCP client she needs to apply workarounds and modify
+  files which are likely to be modified when new version of
+  network-scripts is installed.  Moreover, it is not possible to
+  configure an interface but not have it run on machine start up but
+  later by invoking a command.
+
+  For one example, I have a bridge configured on my workstation.
+  I had to add lines that create the bridge and add interfaces to the
+  rc.inet1.conf file even thought that file should contain only
+  configurations and no actions (the fact that brctl changed the state
+  of the machine I had to add several conditions checking if it's safe
+  to call brctl).
+
+  Another example is my notebook where I wanted to configure something
+  even more insane!  I wanted it to have a static IP address on my
+  home network but use DHCP client on any other network.  To check
+  what network I'm on I've used an arpping technique which allowed me
+  to check if my router is available prior to assigning an IP address.
+  Adding this mechanism to original Slackware's network scripts was
+  not an easy task thought and so I've decided to write this network
+  scripts next generation package.
+
+
+Compatibility
+
+  This package is not compatible with original network scripts so
+  you'll have to rewrite your configuration if you decide to use it.
+  It also has its own subsystem for handling Wireless connections so
+  don't use wireless-tools configuration scripts if you use this
+  package.
+
+  As a side note I may add that the scripts in this package should
+  work with any recent POSIX shell and they don't require bash to run.
+
+
+Mechanism
+
+  Subsystems
+
+  This package uses an idea of "subsystems".  Each network interface
+  has a subsystem assigned to it.  Subsystems handle configuration of
+  given interface interpreting interface's configuration variables.
+  The following subsystems are present:
+  * static     -- for configuring static IP address
+  * dhcp       -- for configuring DHCP client
+  * bridge     -- for configuring bridges
+  * base       -- for configuring only basics (MAC address, debug level)
+
+  There are also two "pseudo" subsystems:
+  * gateway    -- for configuring default gateway
+  * loopback   -- for configuring loopback interface
+
+  There's also an interface which is not accessible directly but
+  thought a WLAN_RUN=yes option.  This is wlan subsystem which
+  configures Wireless interfaces.
+
+  Not included in a network-scripts-ng package but present in the
+  repository are also the following subsystems:
+  * mn-arpping -- configuration depending if machine with given MAC is
+                  present in the network
+  * mn-multi   -- allows configuring several interfaces as a one
+                  pseudo interface
+
+  Interfaces
+
+  Besides "normal" network interfaces there may be present other
+  "pseudo" interfaces.  For instance a bridge subsystem assigned to
+  foo interface requires that there is a foo-brif interface with
+  configuration for the bridge (foo interface contains configuration
+  of bridge ports etc and foo-brig configuration of bridge's IP etc).
+
+  With pseudo interfaces one can also create several configurations
+  for a single network interface.  As an example one can have foo-home
+  and foo-work interfaces each with slightly different settings
+  invoked at home or work.
+
+  A feature to specify different settings when interface is brought up
+  and different when it is brought down is also available.  This may
+  be useless but it is possible.
