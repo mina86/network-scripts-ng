@@ -1,0 +1,146 @@
+#!/bin/sh
+
+PKG_BASE_NAME=network-scripts-ng
+PKG_DESCRIPTION='Scripts to configure a network'
+PKG_VERSION=12.1
+PKG_ARCH=noarch
+PKG_BUILD=1
+
+
+# Initialise
+set -e
+
+# Read basic information
+#CWD=$(cd ..; pwd)
+CWD=$PWD
+PKG=${TMP:-/tmp}/$PKG_BASE_NAME-$PKG_VERSION-$PKG_ARCH-$PKG_BUILD
+
+# Create new package directory and move there
+rm -rf -- "$PKG"
+mkdir -- "$PKG" "$PKG/install"
+cd "$PKG"
+
+
+# Generate slack-desc
+echo '*** Generating slack-desc'
+sed -e"s/^/$PKG_BASE_NAME: /" <<EOF >install/slack-desc
+$PKG_BASE_NAME ($PKG_DESCRIPTION)
+
+These are the basic scripts and files used to define a network and
+configure network interfaces on Linux.  Most of the original /etc
+files were written by Fred N. van Kempen, or borrowed from BSD.  The
+rc.inet1 along with all rc.inet1.subsystems were written by Michal
+Nazarewicz and are INCOMPATIBLE with oryginal Patrick's scripts.  It
+also contains wlan subsystem for wireless-tools (don't use
+wireless-tools configuration scripts if you use this package).  The
+rc.inet2 script was mostly written by Patrick Volkerding, with
+suggestions and fixes from hundreds of contributors over the years.
+EOF
+
+# Create template doinst.sh
+echo '*** Generating doinst.sh template'
+cat <<EOF >"install/doinst.sh"
+#!/bin/sh
+
+# Handle the incoming configuration files
+#   config <file> [ del ] ...
+#     del   -- delete <file>.new even if it differs from <file>
+config() {
+	while [ \$# -ne 0 ]; do
+		if [ ! -e "\$1" ]; then                  # old file is missing
+			mv -f -- "\$1.new" "\$1"
+		elif [ x"\$2" = xdel ]; then             # file unusable as examples
+			rm -f -- "\$1.new"
+		elif cmp "\$1" "\$1.new" >/dev/null; then # toss the redundant copy
+			rm -f -- "\$1.new"
+		fi
+		# Otherwise, we leave the .new copy for the admin to consider...
+		shift
+		[ x"\$2" != xdel ] || shift
+	done
+}
+
+EOF
+echo "config \\" >>install/doinst.sh
+
+# Set permission
+chmod 0755 . install install/doinst.sh
+chmod 0644 install/slack-desc
+
+# Copy files and fill doinst.sh
+echo '*** Copying files and generating rest of the doinst.sh'
+while read dest mode source rest; do
+	[ -n "$dest" ] || continue
+
+	# Create destination
+	if [ -z "$source" ]; then      # directory
+		mkdir "$dest"
+	elif [ x"$source" = x- ]; then # file same as dest
+		cp -f -- "$CWD/${dest%.new}" "$dest"
+	else                           # file
+		cp -f -- "$CWD/$source" "$dest"
+	fi
+
+	# Set mode
+	chmod "$mode" "$dest"
+
+	# If it's a configuration file fill in line in doinst.sh
+	case "$dest" in *.new)
+		printf '\t%s\t%s\t\\\n' "${dest%.new}" "$rest"
+	esac
+done >>"install/doinst.sh" <<EOF
+etc                                          0755
+etc/hosts.new                                0644 - del
+etc/hosts.deny.new                           0644 -
+etc/hosts.equiv.new                          0644 -
+etc/networks.new                             0644 -
+etc/nntpserver.new                           0644 - del
+etc/resolv.conf.new                          0644 - del
+etc/HOSTNAME.new                             0644 - del
+etc/host.conf.new                            0644 -
+etc/hosts.allow.new                          0644 -
+etc/protocols.new                            0644 -
+etc/rc.d                                     0755
+etc/rc.d/rc.inet1.new                        0755 -
+etc/rc.d/rc.inet1.conf.new                   0644 -
+etc/rc.d/rc.inet2.new                        0755 -
+etc/rc.d/rc.ip_forward.new                   0644 -
+etc/rc.d/rc.wlan.conf.new                    0644 -
+etc/rc.d/rc.inet1.interfaces                 0755
+etc/rc.d/rc.inet1.interfaces/README.new      0644 -
+etc/rc.d/rc.inet1.subsystems                 0755
+etc/rc.d/rc.inet1.subsystems/README.new      0644 -
+etc/rc.d/rc.inet1.subsystems/base.new        0755 -
+etc/rc.d/rc.inet1.subsystems/bridge.new      0755 -
+etc/rc.d/rc.inet1.subsystems/dhcp.new        0755 -
+etc/rc.d/rc.inet1.subsystems/gateway.new     0755 -
+etc/rc.d/rc.inet1.subsystems/loopback.new    0755 -
+etc/rc.d/rc.inet1.subsystems/static.new      0755 -
+etc/rc.d/rc.inet1.subsystems/wlan.new        0644 -
+sbin                                         0755
+sbin/netconfig                               0755 -
+usr                                          0755
+usr/libexec                                  0755
+usr/libexec/setup                            0755
+usr/libexec/setup/netconfig.bridge           0755 -
+var                                          0755
+var/log                                      0755
+var/log/setup                                0755
+var/log/setup/setup.netconfig                0755 -
+EOF
+cat <<EOF >>"install/doinst.sh"
+
+# The above was auto generated, leave this empty line above.
+EOF
+
+# Make package
+echo '*** Creating package'
+rm -f -- "$PKG.tar"
+tar cvf "$PKG.tar" .
+
+echo '*** Compressing package'
+gzip -9 "$PKG.tar"
+mv -f -- "$PKG.tar.gz" "$PKG.tgz"
+
+echo "*** Pacakge ready at $PKG.tgz"
+

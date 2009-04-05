@@ -1,0 +1,9 @@
+#!/bin/sh
+#BLURB="Configure basic network settings"
+TMP=/var/log/setup/tmp
+dialog --title "CONFIGURE NETWORK?" --yesno "Would you like to \
+configure your network?" 5 60
+if [ $? = 0 ]; then
+  # we're gonna do this until we get it right :-)
+  while ! sh sbin/netconfig $*; do :; done
+fi

@@ -1,0 +1,27 @@
+This directory contains scripts which handle specific subsystems.
+Those files are sourced by rc.inet1 if some interface is configured to
+use this particular subsystem.
+
+The first argument of sourced file is the interface name (for instance
+eth0) and the second one is either 'up' for bringing interface up or
+'down' for bringing interface down.
+
+For subsystem to work it must be executable--this is so that you can
+easily disable some subsystems.  Note, however, that some of the
+subsystems refer to other subsystems and if that's the case the
+subsystem file they are referring to does not need to be executable.
+
+If you want do add your own subsystem we encourage you to prefix its
+name with your initials and a hyphen, for instance 'js-foo'.  This way
+you will avoid conflicts with possible future subsystems.
+
+When developing your own subsystem note that everything that your
+scripts writs to file descriptor number 2 (that is standard error
+output) will be logged to syslog (if syslog is running and logger
+available).
+
+Moreover, try not to define too many variables and if you do prefix
+their names with underscore and remember to unset them when they are
+no longer used.  Several subsystems may be run in the same shell
+process and altering environment too much may cause some of them to
+malfunction.

@@ -1,0 +1,25 @@
+#!/bin/sh
+
+echo "mn-arpping($1):  /sbin/ifconfig $IF_NAME up"
+/sbin/ifconfig "$IF_NAME" up
+sleep 1
+
+if read _connstatus </sys/class/net/$IF_NAME/carrier && \
+	[ x"$_connstatus" = x1 ]; then
+	unset _connstatus
+
+	echo "mn-arpping($1):  /usr/local/sbin/arpping $IF_NAME $IP"
+	if _mac=`/usr/local/sbin/arpping "$IF_NAME" "$IP"` && \
+		[ -z "$HWADDR" -o x"$HWADDR" = x"$_mac" ]; then
+		echo "mn-arpping($1):  $IP is $_mac"
+		unset _mac
+		interface_do "$1-arpon" "$2"
+	else
+		unset _mac
+		interface_do "$1-arpoff" "$2"
+	fi
+
+else
+	unset _connstatus
+	echo "mn-arpping($1): no carrier"
+fi

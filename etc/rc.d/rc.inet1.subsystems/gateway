@@ -1,0 +1,25 @@
+#!/bin/sh
+
+if [ -z "$IP" -a -n "$IPADDR" ]; then
+	IP=$IPADDR
+fi
+
+if [ x"$2" = xup ]; then
+	if ! /sbin/route -n | grep "^0.0.0.0" 1> /dev/null ; then
+		if [ ! "$IP" = "" ]; then
+			echo "gateway($1):  /sbin/route add default gw $IP metric 1" >&2
+			/sbin/route add default gw "$IP" metric 1
+		fi
+	fi
+
+	if [ -n "$RESOLV_CONF" ]; then
+		echo "gateway($1): overwriting /etc/resolv.conf"
+		printf %s\\n "$RESOLV_CONF" >/etc/resolv.conf
+	fi
+
+elif [ x"$2" = xdown ]; then
+	if /sbin/route -n | grep "^0.0.0.0" 1> /dev/null ; then
+		echo "gateway($1):  /sbin/route del default" >&2
+		/sbin/route del default
+	fi
+fi

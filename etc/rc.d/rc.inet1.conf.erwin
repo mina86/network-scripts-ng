@@ -1,0 +1,54 @@
+#!/bin/sh
+# /etc/rc.d/rc.inet1.conf
+#
+# This file contains the configuration settings for network
+# interfaces.  If you want, instead of configuring given interface in
+# this file you can put a file in /etc/rc.d/rc.inet1.interfaces/
+# directory.  The end of this file contains list of default subsystems
+# and arguments that they accept.
+
+
+# List of interfaces you want to start automatically
+# Keep lo at the beginning and gw at the end.
+INTERFACES="lo br0 gw"
+
+
+# Configuration for each interface
+interface_config () {
+	# Clear any previous configuration.  This list should contain all
+	# variables that you set in this function or any of the
+	# /etc/rc.d/rc.inet1.interfaces/* files.
+	unset BR_AGEING BR_COSTS BR_FD BR_HELLO BR_INTERFACES BR_MAXAGE BR_PRIO
+	unset BR_PRIORITIES DEBUG_UP DHCP_HOSTNAME DHCP_IPADDR DHCP_KEEPNGW
+	unset DHCP_KEEPNTP DHCP_KEEPRESOLV DHCP_TIMEOUT HWADDR IP IPADDR MTU
+	unset NETMASK SUBSYSTEM RESOLVE_CONF
+
+
+	case "$1--$2" in
+	lo--*)
+		SUBSYSTEM=loopback
+		;;
+
+	gw--*)
+		SUBSYSTEM=gateway
+		IP=192.168.0.1
+		RESOLV_CONF='nameserver 192.168.0.1
+nameserver 194.204.159.1
+nameserver 194.204.152.34'
+		;;
+
+	br0--*)
+		SUBSYSTEM=bridge
+		BR_INTERFACES="eth0 eth1"
+		BR_AGEING=0
+		;;
+
+	br0-brif--*)
+		SUBSYSTEM=static
+		IP=192.168.0.2
+		;;
+
+	*)
+		return 1
+	esac
+}

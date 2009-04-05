@@ -1,0 +1,46 @@
+#!/bin/sh
+
+if [ x"$2" = xup ]; then
+
+	# Basic interface setup
+	if ! . subsystem base "$@"; then
+		return
+	fi
+
+	DHCP_OPTIONS=
+	[ -n "$DHCP_HOSTNAME"          ] && DHCP_OPTIONS="-h ${DHCP_HOSTNAME[$i]}"
+	[   x"$DHCP_KEEPRESOLV" = xyes ] && DHCP_OPTIONS="$DHCP_OPTIONS -R"
+	[   x"$DHCP_KEEPNTP"    = xyes ] && DHCP_OPTIONS="$DHCP_OPTIONS -N"
+	[   x"$DHCP_KEEPGW"     = xyes ] && DHCP_OPTIONS="$DHCP_OPTIONS -G"
+	[ -n "$DHCP_IPADDR"            ] && DHCP_OPTIONS="$DHCP_OPTIONS -s $DHCP_IPADDR"
+
+	# If you set a timeout, you get one, even if the kernel doesn't
+	# think that your device is connected, in case /sys isn't right
+	# (which it usually isn't except right after the device is loaded,
+	# when it usually is):
+	if [ -z "$DHCP_TIMEOUT" ]; then
+		ifconfig "$IF_NAME" up && sleep 1
+		read _connstatus <"/sys/class/net/$IF_NAME/carrier" 2>/dev/null || \
+			_connstatus=0
+		ifconfig "$IF_NAME" down
+		if [ "$_connstatus" = "0" ]; then
+			# The kernel has just told us the cable isn't even plugged
+			# in, but we will give any DHCP server a short chance to
+			# reply anyway:
+			echo "No carrier detected on $IF_NAME.  Reducing DHCP timeout to 10 seconds."
+			DHCP_TIMEOUT=10
+		fi
+		unset _connstatus
+	fi
+
+	# 30 seconds should be a reasonable default DHCP timeout.  60 was too much.  :-)
+	echo "dhcp($1):  /sbin/dhcpcd -d -t ${DHCP_TIMEOUT:-30} $DHCP_OPTIONS $IF_NAME" >&2
+	/sbin/dhcpcd -d -t "${DHCP_TIMEOUT:-30}" $DHCP_OPTIONS "$IF_NAME"
+
+
+
+elif [ x"$2" = xdown ]; then
+	echo "dhcp($1):  /sbin/dhcpcd -k -d $IF_NAME" >&2
+	/sbin/dhcpcd -k -d "$IF_NAME" 2>/dev/null || \
+		/sbin/ifconfig "$IF_NAME" down
+fi

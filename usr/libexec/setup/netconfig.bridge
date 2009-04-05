@@ -1,0 +1,102 @@
+add_subsystem bridge "Configures a bridge" "Lets you configure a bridge joining several interfaces"
+
+subsystem_brisge_info () {
+	var_import if_ "$(var_make_prefix "$1")" br_interfaces
+	echo "a bridge (${br_interfaces:-no interfaces})"
+}
+
+config_IF_bridge () {
+	if=$1
+	shift 1
+
+	list_add _if_export if_br_ageing if_br_prio if_br_fd if_br_hello \
+		if_br_maxage if_br_interfaces if_br_costs if_br_priorities
+	var_import if_ $(var_make_prefix "$if") if_br_ageing if_br_prio if_br_fd \
+		if_br_hello if_br_maxage if_br_interfaces if_br_costs if_br_priorities
+
+	_default=INTERFACES
+	while :; do
+		{
+			printf '%s %s\n%s\n' "$@" '---' '' ''
+			cat <<EOF
+INTERFACES ${if_br_interfaces:-(not set)}
+List of interfaces connected to the brisge
+AGEING     ${if_br_ageing:-(not set)}
+Sets ageing time
+PRIO       ${if_br_prio:-(not set)}
+Sets bridge priority
+FD         ${if_br_fd:-(not set)}
+Sets bridge forward delay
+HELLO      ${if_br_hello:-(not set)}
+Sets hello time
+MAXAGE     ${if_br_maxage:-(not set)}
+Sets max message age
+COSTS      ${if_br_costs:-(not set)}
+List of space separated costs for each port;
+PRIORITIES ${if_br_priorities:-(not set)}
+List of space separated priorities for each port;
+EOF
+		} >$_temp_file
+
+		d_file "$if interface, bridge subsystem" 'Choose option:' || return $?
+		_default=$d
+
+		case "$d" in
+		SUBSYSTEM) return 0 ;;
+
+		APPLY)
+			if d 'Bridge IP address' --yesno \
+"An interface configured with bridge subsystem needs
+another interface to be configured where bridge's
+address is set.  For $if interface this is $if-brif.
+
+Do you want to configure this interface now?  If this
+interface does not exist it will be added for you." 10 60; then
+				d=--CHANGE-INTERFACE=$if-brif
+			fi
+			return 0
+			;;
+
+		INTERFACES) input_validate_set 'Interfaces' \
+'Please enter a list of interfaces connected to the bridge.
+The interfaces should not have configured IP address or so.' \
+				if_br_interfaces valid_interfaces -m;;
+		AGEING) input_validate_set 'Bridge ageing time' \
+'Please enter ethernet (MAC) address ageing time in seconds.' \
+				if_br_ageing -z valid_uint 0 3600;;
+		PRIO) input_validate_set 'Bridge priority' \
+'Please enter bridge priority (an unsigned 16-bit value).
+The bridge with the lowest priority will be selected "root bridge".' \
+				if_br_priorities -z valid_uint 0 65536;;
+		FD) input_validate_set 'Bridge forward delay' \
+'Please enter bridge gorward delay in seconds.' \
+				if_br_fd -z valid_uint 0 3600;;
+		HELLO) input_validate_set 'Bridge hello time' \
+'Please enter bridge hello time in seconds.' \
+				if_br_hello -z valid_uint 0 3600;;
+		MAXAGE) input_validate_set 'Bridge maximum message age' \
+'Please enter bridge maximum message age in seconds.' \
+				if_br_maxage -z valid_uint 0 3600;;
+		COSTS) input_validate_set "Bridge ports' costs" \
+'Please enter a space separated list of costs for each prot.' \
+				if_br_costs -z valid_array valid_uint 0 65535;;
+		PRIORITIES) input_validate_set "Bridge ports' priorities" \
+'Please enter a space separated list of priorities for each prot.' \
+				if_br_costs -z valid_array valid_uint 0 255;;
+		esac
+	done
+}
+
+
+file_conf_bridge () {
+	var_import if_ $(var_make_prefix "$if") if_br_ageing if_br_prio if_br_fd \
+		if_br_hello if_br_maxage if_br_interfaces if_br_costs if_br_priorities
+	case "$if_br_ageing"     in ?*) echo "		BR_AGEING='$if_br_ageing'"; esac
+	case "$if_br_prio"       in ?*) echo "		BR_PRIO='$if_br_prio'"; esac
+	case "$if_br_fd"         in ?*) echo "		BR_FD='$if_br_fd'"; esac
+	case "$if_br_hello"      in ?*) echo "		BR_HELLO='$if_br_hello'"; esac
+	case "$if_br_maxage"     in ?*) echo "		BR_MAXAGE='$if_br_maxage'"; esac
+	case "$if_br_interfaces" in ?*) echo "		BR_INTERFACES='$if_br_interfaces'"; esac
+	case "$if_br_costs"      in ?*) echo "		BR_COSTS='$if_br_costs'"; esac
+	case "$if_br_priorities" in ?*) echo "		BR_PRIORITIES='$if_br_priorities'"; esac
+}

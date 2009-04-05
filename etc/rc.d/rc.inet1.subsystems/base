@@ -1,0 +1,65 @@
+#!/bin/sh
+
+
+if [ x"$2" = xup ]; then
+
+	# No interface yet, try to load module
+	if ! grep "${IF_NAME%%:*}:" /proc/net/dev >/dev/null; then
+		if /sbin/modprobe -c | grep -w "alias $IF_NAME" | grep -vw "alias $IF_NAME off" >/dev/null; then
+			echo "base($1): /sbin/modprobe $IF_NAME" >&2
+			/sbin/modprobe "$IF_NAME"
+		fi
+	fi
+
+
+	# Still does not exist
+	if ! grep "${IF_NAME%%:*}:" /proc/net/dev >/dev/null; then
+		if [ x"$DEBUG_UP" = xyes ]; then
+			echo "base($1):  $IF_NAME interface does not exist (yet)" >&2
+		fi
+		return 1
+	fi
+
+
+	# Already up
+	if /sbin/ifconfig | grep -w "$IF_NAME" 1>/dev/null && \
+		/sbin/ifconfig "$IF_NAME" | grep "inet addr" >/dev/null; then
+		if [ x"$DEBUG_UP" = xyes ]; then
+			echo "base($1):  $IF_NAME is already up, skipping" >&2
+		fi
+		return 1
+	fi
+
+
+	# Set hardware address and MTU
+	if [ -n "$HWADDR" ]; then
+		echo "base($1):  /sbin/ifconfig $IF_NAME hw ether $HWADDR" >&2
+		/sbin/ifconfig "$IF_NAME" hw ether "$HWADDR"
+	fi
+
+	# Set MTU to something else than 1500
+	if [ -n "$MTU" ]; then
+		echo "base($1):  /sbin/ifconfig $IF_NAME mtu $MTU" >&2
+		/sbin/ifconfig "$IF_NAME" mtu "$MTU"
+	fi
+
+
+	# Run wireless subsystem
+	if [ x"$WLAN_RUN" = xyes ]; then
+		subsystem wlan "$@"
+	fi
+
+
+	return 0
+
+
+elif [ x"$2" = xdown ]; then
+	# Run wireless subsystem
+	if [ x"$WLAN_RUN" = xyes ]; then
+		subsystem wlan "$@"
+	fi
+
+
+fi
+
+return 1

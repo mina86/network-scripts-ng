@@ -1,0 +1,6 @@
+#!/bin/sh
+
+for _multi_interface in $MULTI_INTERFACES; do
+	interface_do "$_multi_interface" "$2"
+done
+unset _multi_interface

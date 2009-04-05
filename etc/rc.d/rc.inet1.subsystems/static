@@ -1,0 +1,32 @@
+#!/bin/sh
+
+if [ x"$2" = xup ]; then
+
+	# Basic interface setup
+	if ! subsystem base "$@"; then
+		return
+	fi
+
+	# Not configured
+	if [ -z "$IP" ]; then
+		if [ "$DEBUG_UP" = "yes" ]; then
+			echo "static($1):  $1 interface is not configured in /etc/rc.d/rc.inet1.conf" >&2
+		fi
+		return
+	fi
+
+	# Set IP address
+	if [ -n "$NETMASK" ]; then
+		_NETMASK="netmask $NETMASK"
+	fi
+	echo "static($1):  /sbin/ifconfig $IF_NAME $IP $_NETMASK" >&2
+	# Let ifconfig figure out broadcast address on its own.
+	# It should be clever enough to do this.
+	/sbin/ifconfig "$IF_NAME" $IP $_NETMASK
+	unset _NETMASK
+
+
+elif [ x"$2" = xdown ]; then
+	echo "static($1):  /sbin/ifconfig $IF_NAME down" >&2
+	/sbin/ifconfig "$IF_NAME" down
+fi

@@ -1,0 +1,114 @@
+#!/bin/sh
+# /etc/rc.d/rc.inet1
+# This script is used to bring up the various network interfaces.
+
+{ # this is for manipulating file descriptors at the end
+
+
+## Check arguments
+if [ $# -eq 0 ]; then
+	set -- up
+#	cat <<EOF
+#usage: rc.inet1 [<if>_](up|down|start|stop|restart) [ ... ]
+#  <if>    interface name
+#          if ommited all interfaces enumerated in rc.inet1.conf
+#          gw is a special interface meaning default gateway
+#EOF
+#	exit 0
+fi
+
+
+## Load configuration
+. "/etc/rc.d/rc.inet1.conf"
+
+
+## Loads and executes subsystem
+# subsystem [ -x ] <subsystem> <if> ( up | down )
+subsystem () {
+	if [ x"$1" = xnull ] || [ x"$1" = x-x -a x"$2" = xnull ]; then
+		return
+	fi
+	if [ x"$1" = x-x ]; then
+		shift
+		if ! [ -x "/etc/rc.d/rc.inet1.subsystems/$1" ]; then
+			echo "$1: no such subsystem" >&2
+			return 1
+		fi
+	fi
+	IF_NAME=${2%%-*}
+	. "/etc/rc.d/rc.inet1.subsystems/$1" "$2" "$3"
+}
+
+
+## Brings given interface up/down
+# interface_do <if> ( up | down )
+interface_do () {
+	if ! interface_config "$1" "$2"; then
+		if [ -x "/etc/rc.d/rc.inet1.interfaces/$1" ]; then
+			. "/etc/rc.d/rc.inet1.interfaces/$1" "$2"
+		else
+			echo "$1: no such interface" >&2
+			return 1
+		fi
+	fi
+	if [ -z "$SUBSYSTEM" ]; then
+		echo "$1: interface misconfigured" >&2
+		return 1
+	fi
+
+	if [ -z "$IP" -a -n "$IPADDR" ]; then
+		IP=$IPADDR
+	fi
+	IPADDR=$IP
+
+	subsystem -x "$SUBSYSTEM" "$1" "$_direction"
+}
+
+
+## Brings interfaces up, down or restarts interfaces
+# interface ( up | down | start | stop | restart ) <if> [ <if> ... ]
+# Interfaces are brought down in the reverse order that they are given
+interface () {
+	case "$1" in
+	start|up)
+		_direction=up
+		shift
+		;;
+	stop|down)
+		_direction=down
+		shift
+		_interfaces="$*"
+		set --
+		for _if in $_interfaces; do set -- "$_if" "$@"; done
+		;;
+	restart)
+		shift
+		interface down "$@"
+		interface up   "$@"
+		return
+		;;
+	*)
+		echo fatal: internal error
+		return 1
+	esac
+
+	while [ $# -ne 0 ]; do
+		interface_do "$1" "$_direction"
+		shift
+	done
+}
+
+
+## Go through arguments
+while [ $# -ne 0 ]; do
+	case "$1" in
+	up|down|start|stop|restart)                interface $1 $INTERFACES ;;
+	*?_up|*?_down|*?_start|*?_stop|*?_restart) interface ${1##*_} "${1%_*}" ;;
+	*?)                                        interface up "$1"
+	esac
+	shift
+done 3>&2 2>&1 1>&3 | if [ -f /var/run/syslogd.pid -a -x /usr/bin/logger ]; then
+	/usr/bin/logger -s -trc.inet1 2>&1
+else
+	sed -e 's/^/rc.inet1: /'
+fi } 3>&2 2>&1 1>&3 | sed -e 's/^/rc.inet1: /'

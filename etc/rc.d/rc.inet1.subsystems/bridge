@@ -1,0 +1,58 @@
+#!/bin/sh
+
+
+brctl_run () {
+	if [ -n "$3" ]; then
+		echo "bridge($1):  brctl $*" >&2
+		brctl "$@"
+	fi
+}
+
+
+if [ x"$2" = xup ]; then
+	if ! brctl show |grep ^"$IF_NAME" >/dev/null; then
+		echo "bridge($1):  brctl addbr $IF_NAME" >&2
+		brctl addbr "$IF_NAME"
+
+		brctl_run setageing       "$IF_NAME" "$BR_AGEING"
+		brctl_run setbridgeprio   "$IF_NAME" "$BR_PRIO"
+		brctl_run setfd           "$IF_NAME" "$BR_FD"
+		brctl_run sethello        "$IF_NAME" "$BR_HELLO"
+		brctl_run setmaxage       "$IF_NAME" "$BR_MAXAGE"
+
+		if [ x"$BR_STP" = xyes ]; then
+			brctl_run stp "$IF_NAME" on
+		fi
+
+		for _if in $BR_INTERFACES; do
+			ifconfig "$_if" up
+			ifconfig "$_if" 0.0.0.0
+			echo "bridge($1):  brctl addif $IF_NAME $_if" >&2
+			brctl addif "$IF_NAME" "$_if"
+		done
+
+		_port=0
+		for _cost in $BR_COSTS; do
+			[ x"$_cost" != x- ] && \
+				brctl_run setpathcost "$IF_NAME" "$_port" "$_cost"
+			_port=$(( $_port + 1 ))
+		done
+
+		_port=0
+		for _prio in $BR_PRIORITIES; do
+			[ x"$_prio" != x- ] && \
+				brctl_run setpathprio "$IF_NAME" "$_port" "$_prio"
+			_port=$(( $_port + 1 ))
+		done
+
+		unset _if _port _cost _prio
+	fi
+
+	interface_do "$1-brif" "$2"
+
+
+elif [ x"$2" = xdown ]; then
+	interface_do "$1-brif" "$2"
+	echo "bridge($1):  brctl delbr $IF_NAME" >&2
+	brctl delbr "$IF_NAME"
+fi

@@ -1,0 +1,17 @@
+#!/bin/sh
+
+if [ x"$2" = xup ]; then
+	if grep "$IF_NAME:" /proc/net/dev >/dev/null; then
+		if ! /sbin/ifconfig | grep "^$IF_NAME[[:space:]]" 1> /dev/null ; then
+			echo "loopback($1):  /sbin/ifconfig $IF_NAME 127.0.0.1" >&2
+			/sbin/ifconfig "$IF_NAME" 127.0.0.1
+			echo "loopback($1):  /sbin/route add -net 127.0.0.0 netmask 255.0.0.0 $IF_NAME" >&2
+			/sbin/route add -net 127.0.0.0 netmask 255.0.0.0 "$IF_NAME"
+		fi
+	fi
+elif [ x"$2" = xdown ]; then
+	if grep "$IF_NAME:" /proc/net/dev >/dev/null; then
+		echo "loopback($1):  /sbin/ifconfig $IF_NAME down" >&2
+		/sbin/ifconfig "$IF_NAME" down
+	fi
+fi

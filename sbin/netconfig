@@ -1,0 +1,1336 @@
+#!/bin/sh
+# A script to do basic network configuration.
+# Written by Michal Nazarewicz <mina86@tlen.pl>.
+
+
+#######################################################################
+# Defaults
+#######################################################################
+
+fqdn=darkstar
+gateway=
+nameserver=
+all_interfaces=
+load_interfaces=
+
+OIFS=$IFS
+NL='
+'
+
+
+# Figure out where we are...  cheap hack.
+if [ ! -e etc/slackware-version -a ! -e /etc/installer -a ! -e bin/bash ]; then
+	cd /
+fi
+
+
+# Adjust max height to number of lines on the screen
+if stty -a >/dev/null 2>&1; then
+	get_max_lines () {
+		LINES=$(stty -a | sed -n 's/.*rows[[:space:]]*\([[:digit:]]*\).*/\1/p')
+		[ -n "$LINES" ] && [ "$LINES" -gt 10 ] || LINES=25 # Assume 25
+		MAX_LINES=$(( $LINES - 9 ))
+	}
+	get_max_lines
+	trap get_max_lines SIGWINCH
+else
+	[ -n "$LINES" ] && [ "$LINES" -gt 10 ] || LINES=25 # Assume 25
+	MAX_LINES=$(( $LINES - 9 ))
+fi
+
+
+# Load subsystems (FIXME: is it the best way to load it?)
+SUBSYSTEMS_MENU_ITEMS=
+add_subsystem () {
+	SUBSYSTEMS_MENU_ITEMS="$SUBSYSTEMS_MENU_ITEMS
+$1
+$2
+$3"
+}
+for i in usr/libexec/setup/netconfig.*; do
+	[ -x "$i" ] && . "$i"
+done
+unset i
+
+
+
+
+#######################################################################
+# Dialog handling functions
+#######################################################################
+
+_temp_file=$TMP/netconfig.tmp.$$
+trap 'rm -f -- "$_temp_file"' 0
+
+# d <title> <dialog-options> ...
+d () {
+	if dialog --backtitle 'Network configurator' --title "$@" \
+		2>$_temp_file; then
+		d=`cat "$_temp_file"`
+		return 0
+	else
+		#cat $_temp_file # FIXME, remove
+		return 1
+	fi
+}
+
+# d_file <title> <message>
+d_file () {
+	__title=$1; __message=$2; shift 2
+	while read __line1 __line2 && read __line3; do
+		set -- "$@" "$__line1" "$__line2" "$__line3"
+	done <$_temp_file
+
+	__lines=$(( $# / 3 ))
+	[ $__lines -le $MAX_LINES ] || __lines=$MAX_LINES
+	set -- "$__title" --item-help ${_default:+--default-item} $_default \
+		--menu "$__message" $(( $__lines + 7 )) 65 $__lines "$@"
+	unset __title __message __lines
+	d "$@"
+}
+
+_lines_wc () {
+	IFS=$NL; set -- $1; IFS=$OIFS; __lines=$#
+}
+
+# input <title> <message> <initial value>
+input () {
+	_lines_wc "$2"
+	set -- "$1" --inputbox "$2" $(( $__lines + 7 )) 65 "$3"
+	unset __lines
+	d "$@"
+}
+
+# input <title> <message> <initial value> [ -z ] <validator> <validators-options> ...
+input_validate () {
+	__title=$1; __message=$2; d=$3; __validator=$4; __allow_empty=; shift 4
+	case "$__validator" in -z)
+		__allow_empty=yes; __validator=$1; shift
+	esac
+
+	error=
+	while :; do
+		__prev=$d
+		_lines_wc "$error$__message"
+		d "$__title" --inputbox "$error$__message" $(( $__lines + 7 )) 65 "$d" || return $?
+
+		if [ -n "$__allow_empty" -a -z "$d" ] || [ x"$__prev" = x"$d" ] || \
+			"$__validator" "$d" "$@"; then
+			break
+		fi
+
+		error="$error.
+If you know what you are doing and want to use entered
+value anyway input it for the second time.
+
+"
+	done
+
+	unset __title __message __validator __allow_empty __prev
+}
+
+# Like input_validate but instead <initial value> give <variable name>
+# which will be then modified
+input_validate_set () {
+	__title=$1; __message=$2; __variable=$3; shift 3
+	eval __value=\$$__variable
+	if input_validate "$__title" "$__message" "$__value" "$@"; then
+		eval $__variable=\$d
+	fi
+	unset __title __message __variable __value
+}
+
+
+
+#######################################################################
+# Variables namespace importing and exporting
+#######################################################################
+
+var_make_prefix () {
+	while [ x"${1#*-}" != x"$1" ]; do
+		set -- "${1#*-}_${1%%-*}" "$2"
+	done
+	echo "${2:-IF}__${1}__"
+}
+
+# var_import <dest_prefix> <src_prefix> <var> [ <var> ... ]
+# Imports empty value as unset
+var_import () {
+	__dest_prefix=$1
+	__src_prefix=$2
+	shift 2
+
+	while [ $# -ne 0 ]; do
+		eval "case \"\$$__src_prefix$1\" in ?*) $__dest_prefix$1=\$$__src_prefix$1 ;; *) unset $__dest_prefix$1 ; esac"
+		shift
+	done
+
+	unset __dest_prefix __src_prefix
+}
+
+toggle () {
+	eval "case \"\$$1\" in yes) unset $1 ;; *) $1=yes ; esac"
+}
+
+
+#######################################################################
+# List manipulation functions
+#######################################################################
+
+# list_add list_name entry [ entry ... ]
+list_add () {
+	__list_missed=0
+	__list_name=$1
+	eval __list=\$$1
+	shift
+	while [ $# -gt 0 ]; do
+		case " $__list " in
+		*" $1 "*) __list_missed=1 ;;
+		*) __list="$__list $1"
+		esac
+		shift
+	done
+	set -- $__list
+	eval $__list_name=\"\$*\"
+	unset __list_name __list
+	return $__list_missed
+}
+
+# list_rem list_name entry
+list_rem () {
+	eval __list=\$$1
+	case " $__list " in *" $2 "*)
+		__list=" $__list "
+		__list="${__list#*" $2 "} ${__list%%" $2 "*}"
+		__list=${__list# }; __list=${__list% }
+		eval $1=\$__list
+		unset __list
+		return 0
+	esac
+	unset __list
+	return 1
+}
+
+# list_has list entry   # not list name but list!
+list_has () {
+	case " $1 " in
+	*" $2 "*) return 0 ;;
+	*) return 1
+	esac
+}
+
+
+
+#######################################################################
+# Valdiation functions
+#######################################################################
+
+# valid_domain <fqdn>
+valid_domain () {
+	if [ -z "$1" ]; then
+		error='FQDN is empty'
+		return 1
+	elif [ ${#1} -gt 255 ]; then
+		error='FQDN is too long'
+		return 1
+	fi
+
+	case "$1" in
+	*[!a-z0-9-.]*)
+		error='FQDN contains invalid characetrs'
+		return 1 ;;
+	.*|*.)
+		error='FQDN starts or ends with a dot'
+		return 1 ;;
+	*..*)
+		error='FQDN contains empty parts'
+		return 1
+	esac
+
+	IFS=.; set -- $1; IFS=$OIFS
+	while [ $# -gt 0 ]; do
+		if [ ${#1} -gt 63 ]; then
+			error='FQDN has a too long part'
+			return 1
+		fi
+		shift
+	done
+
+	return 0
+}
+
+
+# valid_ip <ip>
+valid_ip () {
+	if [ -z "$1" ]; then
+		error='IP is empty'
+		return 1
+	fi
+
+	case "$1" in
+	*[!0-9.]*)
+		error='IP contains invalid characetrs'
+		return 1 ;;
+	.*|*.)
+		error='IP starts or ends with a dot'
+		return 1 ;;
+	*..*)
+		error='IP contains empty parts'
+		return 1
+	esac
+
+	IFS=.; set -- $1; IFS=$OIFS
+	if [ $# -ne 4 ]; then
+		error='IP contains wrong number of octets'
+		return 1
+	fi
+
+	if [ "$1" -gt 223 ]; then
+		error="IP is not A, B or C class, expected first octet to be <= 223"
+		return 1
+	fi
+
+	while [ $# -ne 0 ]; do
+		if [ $1 -gt 255 ]; then
+			error="$1 is too big for one of IP's octets"
+			return 1
+		fi
+		shift
+	done
+
+	return 0
+}
+
+valid_ips () {
+	set -- $1
+	case $# in 0)
+		error='No addresses given'
+		return 2
+	esac
+
+	while [ $# -gt 0 ]; do
+		valid_ip "$1" || return $?
+		shift
+	done
+
+	return 0
+}
+
+
+# valid_netmask <netmask/prefix>
+# as a side effetct, if prefix give, converts it into netmask and
+# saves it in d
+valid_netmask () {
+	case "$1" in
+	*[!0-9.]*)
+		error='Netmask contains invalid characetrs'
+		return 1 ;;
+	.*|*.)
+		error='Netmask starts or ends with a dot'
+		return 1 ;;
+	*..*)
+		error='Netmask contains empty parts'
+		return 1 ;;
+	*.*) ;;
+
+	?*)
+		if ! [ "$1" -ge 8 -a "$1" -le 30 ] 2>/dev/null; then
+			error='Prefix length seems invalid (expected integer form 8 to 30)'
+			return 1
+		fi
+		d=
+		for i in 0 8 16 24; do
+			case $(( $1 - $i )) in
+			-*|0) d=$d.0 ;;
+			1)    d=$d.128 ;;
+			2)    d=$d.196 ;;
+			3)    d=$d.224 ;;
+			4)    d=$d.240 ;;
+			5)    d=$d.248 ;;
+			6)    d=$d.252 ;;
+			7)    d=$d.254 ;;
+			*)    d=$d.255 ;;
+			esac
+		done
+		d=${d#.}
+		return 0 ;;
+
+	*)
+		error='Netmask is empty'
+		return 1
+	esac
+
+	IFS=.; set -- $1; IFS=$OIFS
+	if [ $# -ne 4 ]; then
+		error='Netmask contains wrong number of octets'
+		return 1
+	fi
+
+	i=0
+	while [ $# -ne 0 ] && [ "$1" -eq 255 ]; do
+		i=$(( $i + 8 ))
+		shift
+	done
+
+	if [ $# -ne 0 ]; then
+		case "$1" in
+			  0) ;;
+			128) i=$(( $i + 1 )) ;;
+			196) i=$(( $i + 2 )) ;;
+			224) i=$(( $i + 3 )) ;;
+			240) i=$(( $i + 4 )) ;;
+			248) i=$(( $i + 5 )) ;;
+			252) i=$(( $i + 6 )) ;;
+			254) i=$(( $i + 7 )) ;;
+			*)
+				error="$1 is an invalid netmask's octet value"
+				return 1
+		esac
+		shift
+	fi
+
+	while [ $# -gt 0 ] && [ "$1" -eq 0 ]; do
+		shift
+	done
+
+	if [ $# -ne 0 ]; then
+		error='Netmask has a non-zero octet after a non-255 octet.'
+		return 1
+	elif [ $i -lt 8 -o $i -gt 30 ]; then
+		error='Netmask seems invalid (expected prefix length form 8 to 30)'
+		return 1
+	fi
+
+	return 0
+}
+
+
+# netmask_from_ip <ip>
+netmask_from_ip () {
+	if valid_ip "$1"; then
+		IFS=.; set -- $1; IFS=$OIFS
+		if [ $1 -le 127 ]; then
+			echo 255.0.0.0
+		elif [ $1 -le 191 ]; then
+			echo 255.255.0.0
+		elif [ $1 -le 223 ]; then
+			echo 255.255.255.0
+		else
+			echo 255.255.255.0
+			return 1
+		fi
+	else
+		echo 255.255.255.0
+		return 1
+	fi
+}
+
+
+# valid_mac <mac>
+# As a side effect, if <mac> is given with dashes d is assigned mac
+# with colons.  Also, d is converted to lower case.
+valid_mac () {
+	case "$1" in
+	[0-9a-fA-F][0-9a-fA-F][-:][0-9a-fA-F][0-9a-fA-F][-:][0-9a-fA-F][0-9a-fA-F][-:][0-9a-fA-F][0-9a-fA-F][-:][0-9a-fA-F][0-9a-fA-F][-:][0-9a-fA-F][0-9a-fA-F]) ;;
+	*)
+		error="Invalid hardware address"
+		return 1
+	esac
+
+	IFS=':-'; set -- $1; IFS=$OIFS
+	d=$(echo $1:$2:$3:$4:$5:$6 | tr ABCDEF abcdef)
+
+	case "$1" in
+	?[13579bdfBDF])
+		error="Multicast hardware address given"
+		return 1 ;;
+	?[014589cdCD])
+		error="A globally unique address given"
+		return 1
+	esac
+}
+
+
+# valid_if <name>
+valid_if () {
+	case "$1" in *--down|*--up) set -- "${1%--*}" ; esac
+
+	case "$1" in
+	*[!a-z0-9-]*)
+		error='Interface name contains invalid characetrs'
+		return 1 ;;
+	-*|*-)
+		error='Interface name starts or ends with a hypen'
+		return 1 ;;
+	*--*)
+		error='Interface name contains "--"'
+		return 1 ;;
+	?*) ;;
+	*)
+		error='No interface name given'
+		return 1 ;;
+	esac
+}
+
+
+# valid_interfaces <interfaces>
+valid_interfaces () {
+	__list_invalid=
+	__list_missing=
+	__list_duplicates=
+	__list_done=
+	__list_ignore_missing=$2
+
+	set -- $1
+	while [ $# -ne 0 ]; do
+		if ! list_add __list_done "$1"; then
+			list_add __list_duplicates "$1"
+		elif [ x"$1" = xgw ]; then
+			[ -n "$gateway" ] || __list_missing="$__list_missing $1"
+		elif ! valid_if "$1"; then
+			__list_invalid="$__list_invalid $1"
+		elif ! list_has "$all_interfaces" "$1"; then
+			__list_missing="$__list_missing $1"
+		fi
+		shift
+	done
+
+	error=
+	case "$__list_invalid" in ?*)
+		error="Interface(s) with invalid name: $__list_invalid"
+	esac
+	case "$__list_ignore_missing~:~$__list_missing" in
+	-m~:~*) ;;
+	?*) error="${error:+$error.
+}Interface(s) are not configured: $__list_missing; $2"
+	esac
+	case "$__list_duplicates" in ?*)
+		error="${error:+$error.
+}Interface(s) appear more then once: $__list_duplicates"
+	esac
+
+	unset __list_invalid __list_missing __list_duplicates __list_done __list_ignore_missing
+	test -z "$error"
+}
+
+
+# valid_uint <value> <min> <max>
+valid_uint () {
+	case "$1" in
+	*[!0-9]*)
+		error='Number contains non-digits'
+		return 1 ;;
+	?*) ;;
+	*)
+		error='Empty value given'
+		return 1
+	esac
+
+	case "$2" in ?*)
+		if [ "$1" -lt "$2" ]; then
+			error="Number is too small, expected >= $2"
+			return 1
+		fi
+	esac
+
+	case "$3" in ?*)
+		if [ "$1" -gt "$3" ]; then
+			error="Number is too big, expected <= $3"
+			return 1
+		fi
+	esac
+}
+
+
+# valid_array <value> <callback...>
+valid_array () {
+	__error=; __array=$1; __callback=$2; shift 2
+	for __array_value in $__array; do
+		if ! __callback "$__array_value" "$@"; then
+			__error="; $__array_value: $error";
+		fi
+	done
+	error=${__error#"; "}
+	unset __error __array __callback
+	test -z "$error"
+}
+
+
+# valid_dir <directory>
+valid_dir () {
+	if ! [ -d "$1" ]; then
+		error="$1 is not a directory"
+	else
+		error=
+	fi
+	case "$d" in
+		*/) ;;
+		*)  d=$d/
+	esac
+	test -z "$error"
+}
+
+
+#######################################################################
+# Built in configuration for base-config, static and dhcp subsystems
+#######################################################################
+
+# Basic information
+SUBSYSTEMS_MENU_ITEMS="static
+Static IP address
+Configures interface to use static IP address
+dhcp
+Dynamic IP address
+Configures interface to use DHCP client$SUBSYSTEMS_MENU_ITEMS
+base
+Base subsystem
+Configurations only base parameters of the interface"
+
+
+subsystem_static_info () {
+	var_import if_ "$(var_make_prefix "$1")" ip
+	echo "${if_ip:-static IP not set}"
+}
+
+subsystem_dhcp_info () {
+	echo 'dynamic address (uses DHCP)'
+}
+
+
+####################
+# Base subsystem
+####################
+
+_config_IF_base () {
+	case $# in
+	0)
+		cat <<EOF
+---
+
+DEBUG ${if_debug_up:-no}
+Whether you want debug messages to be printed
+HWADDR ${if_hwaddr:-(not set)}
+Interface's hardware address (MAC)
+MTU ${if_mtu:-(not set)}
+Interface's maximum transmission unit (MTU)
+EOF
+		;;
+	*)
+		list_add _if_export debug_up hwaddr mtu
+		var_import if_ $(var_make_prefix "$1") debug_up hwaddr mtu
+	esac
+
+	case "$wlan_subsystem_loaded" in yes)
+		_config_IF_wlan "$@"
+	esac
+}
+
+
+config_IF_base () {
+	if=$1
+	shift 1
+
+	_config_IF_base "$if"
+
+	_default=
+	while :; do
+		{
+			printf '%s %s\n%s\n' "$@"
+			_config_IF_base
+		} >$_temp_file
+
+		d_file "$if interface, base subsystem" 'Choose option:' || return $?
+		_default=$d
+
+		case "$d" in
+		SUBSYSTEM|APPLY) return 0 ;;
+		---) ;;
+		*?) config_IF_base_ "$d"
+		esac
+	done
+}
+
+
+config_IF_base_ () {
+	case "$1" in
+	SUBSYSTEM|APPLY) return 1 ;;
+	DEBUG) toggle if_debug_up ;;
+	HWADDR)
+		input_validate_set 'Hardware address' \
+'Please enter a hardware address, such as: 12:34:56:78:9a:bc' \
+			if_hwaddr -z valid_mac
+		;;
+	MTU)
+		input_validate_set 'MTU' \
+'Please enter a maximum transmission unit as an unsigned
+integer, such as: 1500' \
+			if_mtu -z valid_uint 0 200
+		;;
+	*) config_IF_wlan_ "$@"
+	esac
+}
+
+
+file_conf_base () {
+	var_import if_ $(var_make_prefix "$1") debug_up hwaddr mtu
+	case "$if_debug_up" in yes) echo '		DEBUG_UP=yes'; esac
+	case "$if_hwaddr"   in ?*)  echo "		HWADDR='${if_hwaddr}'"; esac
+	case "$if_mtu"      in ?*)  echo "		MTU='${if_mtu}'"; esac
+	case "$wlan_subsystem_loaded" in yes)
+		file_conf_wlan "$@"
+	esac
+}
+
+
+####################
+# Static subsystem
+####################
+
+config_IF_static () {
+	if=$1
+	shift 1
+
+	list_add _if_export ip netmask
+	var_import if_ $(var_make_prefix "$if") ip netmask
+	_config_IF_base "$if"
+
+	_default=IP
+	while :; do
+		{
+			printf '%s %s\n%s\n' "$@" '---' '' ''
+			echo "IP ${if_ip:-(not set)}"
+			echo 'Interface'\''s static IP address'
+			if [ -n "$if_netmask" ]; then
+				echo "NETMASK $if_netmask"
+			elif __netmask=$(netmask_from_ip "$if_ip"); then
+				echo "NETMASK (default $__netmask)"
+			else
+				echo "NETMASK (not set)"
+			fi
+			unset __netmask
+			echo 'Interface'\''s netmask'
+			_config_IF_base
+		} >$_temp_file
+
+		d_file "$if interface, static subsystem" 'Choose option:' || return $?
+		_default=$d
+
+		case "$d" in
+		SUBSYSTEM|APPLY) return 0 ;;
+		IP)
+			input_validate_set 'IP address' \
+'Please enter an IP address, such as: 192.168.0.42' \
+				if_ip valid_ip
+			;;
+		NETMASK)
+			input_validate_set 'Net mask address' \
+'Please enter an interface netmask, such as: 255.255.255.0
+or number of ones in netmask, ie. prefix length, such as 24.' \
+				if_netmask valid_netmask
+			;;
+		---) ;;
+		*?) config_IF_base_ "$d"
+		esac
+	done
+}
+
+
+# Generate configuration for static subsystem
+file_conf_static () {
+	file_conf_base "$1"
+	var_import if_ $(var_make_prefix "$if") ip netmask
+	case "$if_ip"       in ?*)  echo "		IP='${if_ip}'"; esac
+	case "$if_netmask"  in ?*)  echo "		NETMASK='${if_netmask}'"; esac
+}
+
+
+
+
+####################
+# DHCP subsystem
+####################
+
+config_IF_dhcp () {
+	if=$1
+	shift 1
+
+	list_add _if_export dhcp_ipadd dhcp_hostname \
+		dhcp_keepresolv dhcp_heekntp dhcp_keepgw dhck_timeout
+	var_import if_ $(var_make_prefix "$if") dhcp_ipadd dhcp_hostname \
+		dhcp_keepresolv dhcp_heekntp dhcp_keepgw dhck_timeout
+	_config_IF_base "$if"
+
+	_default=
+	while :; do
+		{
+			printf '%s %s\n%s\n' "$@" '---' '' ''
+			cat <<EOF
+IP ${if_dhcp_ipaddr:-(not set)}
+IP address to be used wth DHCP_INFORM message
+HOSTNAME ${if_dhcp_hostname:-(not set)}
+Hostname option field
+KEEPRESOLV ${if_dhcp_keepresolv:-no}
+Whether to keep existing /etc/resolv.conf
+KEEPNTP ${if_dhcp_keepntp:-no}
+Whether to keep existing /etc/ntp.conf
+KEEPGW  ${if_dhcp_keepgw:-no}
+Whether to prevent installing default routers
+TIMEOUT ${if_dhcp_timeout:-(not set)}
+DHCP client timeout
+EOF
+			_config_IF_base
+		} >$_temp_file
+
+		d_file "$if interface, static subsystem" 'Choose option:' || return $?
+		_default=$d
+
+		case "$d" in
+		SUBSYSTEM|APPLY) return 0 ;;
+		IP)
+			input_validate_set 'IP address' \
+				'Please enter an IP address, such as: 192.168.0.42,
+used with DHCP_INFORM message' if_dhcp_ipaddr -z valid_ip
+			;;
+		HOSTNAME)
+			input_validate_set 'DHCP hostname' \
+'Please enter a hotname option string used by DHCP client'
+				if_dhcp_hostname -z valid_domain
+			;;
+		TIMEOUT)
+			input_validate 'DHCP timeout' \
+'Please enter a DHCP client timeout in seconds' \
+				if_dhcp_timeout -z valid_uint 10 300
+			;;
+		KEEPRESOLV) toggle if_dhcp_keepresolv ;;
+		KEEPNTP)    toggle if_dhcp_keepntp ;;
+		KEEPGW)     toggle if_dhcp_keepgw ;;
+		---) ;;
+		*?) config_IF_base_ "$d"
+		esac
+	done
+}
+
+
+# Generate configuration for static subsystem
+file_conf_dhcp () {
+	file_conf_base "$1"
+	var_import if_ $(var_make_prefix "$if") dhcp_ipadd dhcp_hostname \
+		dhcp_keepresolv dhcp_heekntp dhcp_keepgw dhck_timeout
+	case "$if_dhcp_ipaddr"     in ?*)  echo "		DHCP_IPADDR='${if_dhcp_ipaddr}'"; esac
+	case "$if_dhcp_hostname"   in ?*)  echo "		DHCP_HOSTNAME='${if_dhcp_hostname}'"; esac
+	case "$if_dhcp_keepresolv" in yes) echo '		DHCP_KEEPRESOLV=yes'; esac
+	case "$if_dhcp_keepntp"    in yes) echo '		DHCP_KEEPNTP=yes'; esac
+	case "$if_dhcp_keepgw"     in yes) echo '		DHCP_KEEPGW=yes'; esac
+	case "$if_dhcp_timeout"    in ?*)  echo "		DHCP_TIMEOUT='${if_dhcp_timeout}'"; esac
+}
+
+
+
+#######################################################################
+# Interface configuration menu
+#######################################################################
+
+config_IF () {
+	__remember_if=$1
+	if=$1
+	_if_export=subsystem
+	var_import if_ "$(var_make_prefix "$if")" subsystem
+
+	while :; do
+		if [ -z "$if_subsystem" ]; then
+			d=SUBSYSTEM
+		else
+			config_IF_${if_subsystem} "$if" \
+				SUBSYSTEM "$if_subsystem" 'Subsystem used to bring interface up' \
+				APPLY 'Apply changes' 'Save configuration changes' || return $?
+		fi
+
+		case "$d" in
+		SUBSYSTEM)
+			IFS=$NL; set -- $SUBSYSTEMS_MENU_ITEMS; IFS=$OIFS
+			__lines=$(( $# / 3 ))
+
+			[ $__lines -le $MAX_LINES ] || __lines=$MAX_LINES
+			d "$if interface" --item-help --default-item "$if_subsystem" \
+				--menu "Choose subsystem for $if interface:" \
+				$(( $__lines + 7 )) 65 $__lines "$@" || return $?
+			unset __lines
+
+			case "$d" in DELETE)
+				list_rem all_interfaces  "$if"
+				list_rem load_interfaces "$if"
+				return 0
+			esac
+
+			if_subsystem=$d
+			;;
+
+		APPLY|--CHANGE-INTERFACE=*)
+			list_add all_interfaces "$if"
+			var_import "$(var_make_prefix "$if")" if_ $_if_export
+			case "$d" in APPLY)
+				if=$__remember_if
+				unset __remember_if _if_export
+				return 0
+			esac
+			config_changed=yes
+			if=${d#*=}
+			_if_export=subsystem
+			var_import if_ "$(var_make_prefix "$if")" subsystem
+		esac
+	done
+}
+
+
+
+#######################################################################
+# Generating config files
+#######################################################################
+
+binary_and () {
+	set -- $1 $2 0 1
+	while [ $(( $1 * $2 )) -ne 0 ]; do
+		set -- $(( $1 / 2 )) $(( $2 / 2 )) \
+			$(( $3 + ($1 % 2) * ($2 % 2) * $4 )) $(( $4 * 2 ))
+	done
+	echo $3
+}
+
+guess_ip () {
+	ip=; netmask=; network=
+	for if in $load_interfaces $all_interfaces; do
+		case "$if" in gw) continue; esac
+		var_import if_ $(var_make_prefix "$if") ip netmask
+		case "$if_ip" in *?)
+			ip=$if_ip
+			netmask=$if_netmask
+			break
+		esac
+	done
+
+	case "$ip::$netmask" in ?*::)
+		netmask=$(netmask_from_ip "$ip") || return
+	esac
+
+	if valid_ip "$ip" && valid_netmask "$netmask"; then
+		IFS=.; set -- $ip $netmask; IFS=$OIFS
+		network=$(binary_and $1 $5).$(binary_and $2 $6).$(binary_and $3 $7).$(binary_and $4 $8)
+		valid_ip "$network" || unset network
+	fi
+}
+
+
+file_conf () {
+	cat <<EOF
+#!/bin/sh
+# /etc/rc.d/rc.inet1.conf
+#
+# This file contains the configuration settings for network
+# interfaces.  If you want, instead of configuring given interface in
+# this file you can put a file in /etc/rc.d/rc.inet1.interfaces/
+# directory.  The end of this file contains list of default subsystems
+# and arguments that they accept.
+
+
+# List of interfaces you want to start automatically
+# Keep lo at the beginning and gw at the end.
+#INTERFACES="lo eth0 gw"
+INTERFACES="lo${load_interfaces+ }$load_interfaces"
+
+
+# Configuration for each interface
+interface_config () {
+	# Clear any previous configuration.  This list should contain all
+	# variables that you set in this function or any of the
+	# /etc/rc.d/rc.inet1.interfaces/* files.
+	unset BR_AGEING BR_COSTS BR_FD BR_HELLO BR_INTERFACES BR_MAXAGE BR_PRIO
+	unset BR_PRIORITIES DEBUG_UP DHCP_HOSTNAME DHCP_IPADDR DHCP_KEEPNGW
+	unset DHCP_KEEPNTP DHCP_KEEPRESOLV DHCP_TIMEOUT HWADDR IP IPADDR MTU
+	unset NETMASK SUBSYSTEM RESOLV_CONF
+	unset WLAN_CHANNEL WLAN_ESSID WLAN_FREQ WLAN_FRAG WLAN_IWCONFIG
+	unset WLAN_IWPRIV WLAN_IWSPY WLAN_KEY WLAN_MODE WLAN_NICKNAME
+	unset WLAN_NWID WLAN_RATE WLAN_RTS WLAN_SENS WLAN_WPA WLAN_WPADRIVER
+	unset WLAN_WPACONF WLAN_WPAWAIT WLAN_RUN
+
+
+	case "$1--$2" in
+	lo--*)
+		SUBSYSTEM=loopback
+		;;
+
+EOF
+
+	for if in $all_interfaces; do
+		case "$if" in
+		*--*) echo "	$if)" ;;
+		*)    echo "	$if--*)" ;;
+		esac
+		echo "		SUBSYSTEM=${if_subsystem}"
+
+		var_import if_ $(var_make_prefix "$if") subsystem
+		file_conf_${if_subsystem} "$if"
+
+		echo '		;;'
+	done
+
+	cat <<EOF
+
+#	Some examples:
+#
+#	wlan0--*)
+#		SUBSYSTEM=dhcp
+#		;;
+#
+#	br0--*)
+#		SUBSYSTEM=bridge
+#		BR_INTERFACES="eth0 eth1"
+#		;;
+#
+#	br0-brif--*)
+#		SUBSYSTEM=static
+#		IP=192.168.0.2
+#		;;
+#
+#
+#	eth8--up) # you can set different configuration for bringing interface up
+#		SUBSYSTEM=dhcp
+#		;;
+#	eth8--down) # and for bringing interface down
+#		SUBSYSTEM=static
+#		;;
+#
+#
+#	eth42-home--*) # you can have several separate configurations
+#	               # for the same interface
+#		SUBSYSTEM=static
+#		IP=192.168.0.6
+#		;;
+#
+#	eth42-work--*)
+#		SUBSYSTEM=dhcp
+#		;;
+#
+
+	# Dont' remove that
+	*)
+		return 1
+		# rc.inet1 will also try rc.inet1.interfaces/$1
+	esac
+}
+
+
+#
+# To list all available subsystems see the content of
+# /etc/rc.d/rc.inet1.subsystems directory.  Subsystem's script must be
+# executable if you want to configure an interface to use it.
+#
+
+#
+# Subsytems description:
+#
+# * null              -- does nothing
+#
+# * loopback          -- "pseudo" subsystem used for lo interface
+#
+# * gateway           -- "pseudo" subsystem used for setting default gateway
+#   IP=<ip>              -- gateway's IP address, overwrites IPADDR
+#   IPADDR=<ip>          -- gateway's IP address (required)
+#   RESOLV_CONF=<str>    -- content of /etc/resolv.conf, if present this
+#                           file will be replaced
+#
+# * base              -- only loads module if it is required and
+#                        sets hardware address and MTU
+#   (all arguments that wlan accepts; if WLAN_RUN set to yes)
+#   DEBUG_UP=yes         -- prints some debug messages
+#   HWADDR=<hwaddr>      -- sets hardware address
+#   MTU=<mtu>            -- sets MTU
+#   WLAN_RUN=yes         -- run wlan subsystem
+#
+# * static            -- configures static IP adddress
+#   (all arguments that base accepts)
+#   IP=<ip>              -- IP address to use, overwrites IPADDR
+#   IPADDR=<ip>          -- IP address to use (required)
+#   NETMASK=<mask>       -- network mask
+#
+# * dhcp              -- uses DHCP to configure interface
+#   (all arguments that base accepts)
+#   DHCP_HOSTNAME=<host> -- a string used for the hostname option field
+#   DHCP_KEEPRESOLV=yes  -- prevents dhcpcd from replacing existing
+#                           /etc/resolv.conf file
+#   DHCP_KEEPNTP=yes     -- prevents dhcpcd from replacing existing
+#                           /etc/ntp.conf file
+#   DHCP_KEEPGW=yes      -- prevents dhcpcd from installing default
+#                           routes provided by DHCP server
+#   DHCP_IPADDR=<ip>     -- sends DHCP_INFORM message to DHCP server using ip
+#   DHCP_TIMEOUT=<time>  -- sets timeout to <time>
+#
+# * bridge            -- configure bridge; futher configuration for
+#                        created bridge intrface must be specifies as
+#                        a new interface with -brif appended.
+#   BR_AGEING=<time>     -- sets ageing time
+#   BR_PRIO=<prio>       -- sets bridge priority
+#   BR_FD=<time>         -- sets bridge forward delay
+#   BR_HELLO=<time>      -- sets hello time
+#   BR_MAXAGE=<time>     -- sets max message age
+#   BR_INTERFACES="..."  -- list of space separated interface names to
+#                           use in given bridge (required)
+#   BR_COSTS="..."       -- list of space separated costs for each port;
+#                           to skip one port use a single dash
+#   BR_PRIORITIES="..."  -- list of space separated priorities for each port;
+#                           to skip one port use a single dash
+# * wlan              -- configures wireless devices
+#   WLAN_CHANNEL=...
+#   WLAN_ESSID=...
+#   WLAN_FREQ=...
+#   WLAN_FRAG=...
+#   WLAN_IWCONFIG=...
+#   WLAN_IWPRIV=...
+#   WLAN_IWSPY=...
+#   WLAN_KEY=...
+#   WLAN_MODE=...
+#   WLAN_NICKNAME=...
+#   WLAN_NWID=...
+#   WLAN_RATE=...
+#   WLAN_RTS=...
+#   WLAN_SENS=...
+#   WLAN_WPA=...
+#   WLAN_WPADRIVER=...
+#   WLAN_WPACONF=...
+#   WLAN_WPAWAIT=...
+#
+EOF
+}
+
+file_networks () {
+	cat <<EOF
+#
+# networks      This file describes a number of netname-to-address
+#               mappings for the TCP/IP subsystem.  It is mostly
+#               used at boot time, when no name servers are running.
+#
+
+loopback        127.0.0.0
+localnet        ${network:-127.0.0.0}
+
+# End of networks.
+EOF
+}
+
+file_hosts () {
+	cat <<EOF
+#
+# hosts         This file describes a number of hostname-to-address
+#               mappings for the TCP/IP subsystem.  It is mostly
+#               used at boot time, when no name servers are running.
+#               On small systems, this file can be used instead of a
+#               "named" name server.  Just add the names, addresses
+#               and any aliases to this file...
+#
+# By the way, Arnt Gulbrandsen <agulbra@nvg.unit.no> says that 127.0.0.1
+# should NEVER be named with the name of the machine.  It causes problems
+# for some (stupid) programs, irc and reputedly talk. :^)
+#
+
+# For loopbacking.
+127.0.0.1               localhost
+EOF
+
+	case "$ip::$fqdn" in
+	?*::*.*) printf '%-23s %s\n' "$ip" "$fqdn ${fqdn%%.*}" ;;
+	?*::?*)  printf '%-23s %s\n' "$ip" "$fqdn" ;;
+	esac
+
+	echo
+	echo '# End of hosts.'
+}
+
+file_resolv () {
+	case $fqdn in *.*)
+		echo "search ${fqdn#*.}"
+	esac
+	set -- $nameserver
+	while [ $# -ne 0 ]; do
+		echo "nameserver $1"
+		shift
+	done
+}
+
+files_preview () {
+	guess_ip
+
+	{
+		echo '############################################################'
+		echo '### /etc/rc.d/rc.inet1.conf                              ###'
+		echo '############################################################'
+		echo
+		file_conf || echo '(not created)'
+
+		echo
+		echo '############################################################'
+		echo '### /etc/networks                                        ###'
+		echo '############################################################'
+		echo
+		file_networks || echo '(not created)'
+
+		echo
+		echo '############################################################'
+		echo '### /etc/hosts                                           ###'
+		echo '############################################################'
+		echo
+		file_hosts || echo '(not created)'
+
+		echo
+		echo '############################################################'
+		echo '### /etc/resolv.conf                                     ###'
+		echo '############################################################'
+		echo
+		file_resolv || echo '(not created)'
+	} | sed 's/	/        /g' >$_temp_file
+
+	dialog --backtitle 'Network configurator' \
+		--title 'Configuration preview' \
+		--textbox "$_temp_file" $(( $LINES - 3 )) 75
+}
+
+
+files_save () {
+	guess_ip
+
+	echo
+	echo '*** Saving network configuration ***'
+	echo
+
+	while read __func __file; do
+		__file=$1$__file
+		echo "*** Generating $__file"
+		if   ! $__func >$__file.netconfig                        ; then :
+		elif [ -e "$__file" ] && ! mv -vf -- "$__file" "$__file~"; then :
+		elif ! mv -vf -- "$__file.netconfig" "$__file"           ; then :
+		else :
+		fi
+		rm -f -- "$__file.netconfig"
+		echo
+	done <<EOF
+file_conf       rc.d/rc.inet1.conf
+file_networks   networks
+file_hosts      hosts
+file_resolv     resolv.conf
+EOF
+
+	echo 'Done'
+	echo 'Press enter to continue'
+	read
+}
+
+
+#######################################################################
+# Main menu
+#######################################################################
+
+config_changed=
+change_variable () {
+	if eval "test x\"\$$1\" != x\"$2\""; then
+		eval $1=\$2
+		config_changed=yes
+	fi
+}
+
+default=
+save_prefix=$PWD/etc/
+while :; do
+	set --
+	set -- "$@" HOSTNAME   "${fqdn:-(none)}" 'Your hostname and domain'
+	set -- "$@" GATEWAY    "${gateway:-(none)}" 'Your gateway (default rotuer) address'
+	set -- "$@" NAMESERVER "${nameserver:-(none)}" 'Nameserevr(s) address you will be accessing'
+	set -- "$@" --- '' ''
+	set -- "$@" ADD        'Add another interface' 'Add another interface'
+	for if in $all_interfaces; do
+		var_import if_ "$(var_make_prefix "$if")" subsystem
+		set -- "$@" IF_$if "$if intrface, $(subsystem_${if_subsystem}_info "$if")" "$if intercace configuration"
+	done
+	set -- "$@" INTERFACES "${load_interfaces:-(none)}" 'Interfaces to load at boot time'
+	set -- "$@" '---' '' ''
+	set -- "$@" PREVIEW    'Config preview' 'Preview of confgiuration files content'
+	set -- "$@" PREFIX     "$save_prefix" 'Location where to save files'
+	set -- "$@" SAVE       'Save config files' 'Saves confgiuration files'
+
+	__lines=$(( $# / 3 ))
+	[ $__lines -le $MAX_LINES ] || __lines=$MAX_LINES
+	d 'Network configurator' --item-help \
+		${default:+--default-item} $default \
+		--cancel-label Exit \
+		--menu 'Choose option:' $(($__lines + 7)) 65 $__lines "$@" || d=EXIT
+	default=$d
+	unset __lines
+
+	case "$d" in
+		HOSTNAME)
+			if input_validate 'Fully Qualified Domain Name' \
+'Please enter a fully qualified domain name, such as:
+darkstar.example.org' "$fqdn" valid_domain; then
+				change_variable fqdn "$d"
+			fi ;;
+		GATEWAY)
+			if input_validate 'Gateway address' \
+'Please enter an IP address of your default gateway, such as:
+192.168.0.1' "$gateway" -z valid_ip; then
+				change_variable gateway "$d"
+				case "$gateway" in
+				?*) list_add load_interfaces gw ;;
+				*)  list_rem load_interfaces gw
+				esac
+			fi ;;
+		NAMESERVER)
+			if input_validate 'Nameservers addresses' \
+'Please enter a space separated list of nameservers addresses
+you will be accessing, such as: 192.168.0.1 10.0.3.4' \
+				"$nameserver" -z valid_ips; then
+				change_variable nameserver "$d"
+			fi ;;
+		INTERFACES)
+			if input_validate 'Interfaces' \
+'Please enter space separated list of interfaces to load at
+boot time. Do not include lo interface. The order does matter
+and reflects order in which interfaces will be brought up,
+so you may want to keep gw at the end.' \
+				"$load_interfaces" valid_interfaces; then
+				change_variable load_interfaces "$d"
+			fi ;;
+		ADD)
+			if input_validate 'Add an interface' \
+'Please enter name of an interface you want to configure,
+such as eth0 or wlan0.  You can also specify some "pseudo
+interfaces" like eth0-home or eth0-work or even different
+configurations for bringing interface up (ie. eth0--up) or
+down (ie. eth0--down).' '' valid_if && config_IF "$d"; then
+				config_changed=yes
+				if list_rem load_interfaces gw; then
+					list_add load_interfaces "$if" gw
+				else
+					list_add load_interfaces "$if"
+				fi
+			fi ;;
+		IF_*) config_IF ${d#IF_} ;;
+		PREVIEW) files_preview ;;
+		PREFIX)
+			input_validate_set 'Configuration files prefix' \
+'You can specify the location of etc directory where files
+shall be saved in.' \
+				save_prefix valid_dir ;;
+		SAVE) files_save "$save_prefix"; config_changed= ;;
+		EXIT)
+			if [ -z "$config_changed" ] || d Exit --yesno \
+'Are you sure you want to exit
+without saving configuration files?' 6 40; then
+				exit 0
+			fi ;;
+		---) ;;
+		*?)
+			echo internal error >&2
+			exit 1
+	esac
+done
+
+
+clear
+rm -f -- "$_temp_file"

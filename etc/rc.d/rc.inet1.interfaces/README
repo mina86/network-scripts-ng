@@ -1,0 +1,19 @@
+You may put interfaces configuration files in this directory instead
+of listing them in rc.inet1.conf.  Both options have their advantages
+and disadvantages.  For instance, keeping files here may help in
+syncing several machines configuration files.
+
+Each file should have a name of an interface it keeps configuration
+for.  Moreover, it must be executable or otherwise it won't be taken
+into consideration when loading interfaces configuration -- this is so
+that you can easily disable some interfaces.
+
+As an example, you can have a  eth0  file with the following content:
+
+    SUBSYSTEM=static
+    IP=192.168.0.1
+    NETMASK=255.255.255.128
+
+Those files are sourced with first argument being either 'up' or
+'down' depending whether the interface is about to be brought up or
+down.
