@@ -2,7 +2,7 @@
 
 PKG_BASE_NAME=network-scripts-ng
 PKG_DESCRIPTION='Scripts to configure a network'
-PKG_VERSION=12.1
+PKG_VERSION=13.0
 PKG_ARCH=noarch
 PKG_BUILD=1
 
@@ -55,8 +55,7 @@ config() {
 			rm -f -- "\$1.new"
 		fi
 		# Otherwise, we leave the .new copy for the admin to consider...
-		shift
-		[ x"\$2" != xdel ] || shift
+		if [ x"\$2" = xdel ]; then shift 2; else shift; fi
 	done
 }
 
@@ -83,6 +82,7 @@ while read dest mode source rest; do
 
 	# Set mode
 	chmod "$mode" "$dest"
+	chown root:root "$dest"
 
 	# If it's a configuration file fill in line in doinst.sh
 	case "$dest" in *.new)
@@ -135,12 +135,6 @@ EOF
 
 # Make package
 echo '*** Creating package'
-rm -f -- "$PKG.tar"
-tar cvf "$PKG.tar" .
-
-echo '*** Compressing package'
-gzip -9 "$PKG.tar"
-mv -f -- "$PKG.tar.gz" "$PKG.tgz"
-
-echo "*** Pacakge ready at $PKG.tgz"
+/sbin/makepkg -l n -c n $PKG.txz
+echo "*** Pacakge ready at $PKG.txz"
 
