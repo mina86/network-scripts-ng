@@ -3,7 +3,7 @@
 if [ x"$2" = xup ]; then
 
 	# Basic interface setup
-	if ! . subsystem base "$@"; then
+	if ! subsystem base "$@"; then
 		return
 	fi
 
