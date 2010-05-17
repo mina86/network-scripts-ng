@@ -40,10 +40,18 @@ subsystem () {
 }
 
 
-## Brings given interface up/down
-# interface_do <if> ( up | down )
-interface_do () {
-	if ! interface_config "$1" "$2"; then
+## Get interface configuration
+# interface_cfg <if> ( up | down )
+interface_cfg () {
+	# Clear any previous configuration.  This list should contain all
+	# variables that you set in interface_config function or any of
+	# the /etc/rc.d/rc.inet1.interfaces/* files.
+	unset BR_AGEING BR_COSTS BR_FD BR_HELLO BR_INTERFACES BR_MAXAGE BR_PRIO
+	unset BR_PRIORITIES DEBUG_UP DHCP_HOSTNAME DHCP_IPADDR DHCP_KEEPNGW
+	unset DHCP_KEEPNTP DHCP_KEEPRESOLV DHCP_TIMEOUT HWADDR IP IPADDR MTU
+	unset NETMASK SUBSYSTEM RESOLVE_CONF
+
+	if ! interface_config "$@"; then
 		if [ -x "/etc/rc.d/rc.inet1.interfaces/$1" ]; then
 			. "/etc/rc.d/rc.inet1.interfaces/$1" "$2"
 		else
@@ -51,17 +59,24 @@ interface_do () {
 			return 1
 		fi
 	fi
-	if [ -z "$SUBSYSTEM" ]; then
+	case x$SUBSYSTEM in x)
 		echo "$1: interface misconfigured" >&2
 		return 1
-	fi
+	esac
 
-	if [ -z "$IP" -a -n "$IPADDR" ]; then
+	case x$IP in x)
 		IP=$IPADDR
-	fi
+	esac
 	IPADDR=$IP
+}
 
-	subsystem -x "$SUBSYSTEM" "$1" "$_direction"
+
+## Brings given interface up/down
+# interface_do <if> ( up | down )
+interface_do () {
+	if interface_cfg "$1" "$2"; then
+		subsystem -x "$SUBSYSTEM" "$1" "$2"
+	fi
 }
 
 
