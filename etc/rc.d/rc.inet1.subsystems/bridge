@@ -10,7 +10,7 @@ brctl_run () {
 
 
 if [ x"$2" = xup ]; then
-	if ! brctl show |grep ^"$IF_NAME" >/dev/null; then
+	if ! brctl show | grep -q ^"$IF_NAME"; then
 		echo "bridge($1):  brctl addbr $IF_NAME" >&2
 		brctl addbr "$IF_NAME"
 

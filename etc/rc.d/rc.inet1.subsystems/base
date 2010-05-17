@@ -4,8 +4,8 @@
 if [ x"$2" = xup ]; then
 
 	# No interface yet, try to load module
-	if ! grep "${IF_NAME%%:*}:" /proc/net/dev >/dev/null; then
-		if /sbin/modprobe -c | grep -w "alias $IF_NAME" | grep -vw "alias $IF_NAME off" >/dev/null; then
+	if ! grep -q "${IF_NAME%%:*}:" /proc/net/dev; then
+		if /sbin/modprobe -c | grep -w "alias $IF_NAME" | grep -qvw "alias $IF_NAME off"; then
 			echo "base($1): /sbin/modprobe $IF_NAME" >&2
 			/sbin/modprobe "$IF_NAME"
 		fi
@@ -13,7 +13,7 @@ if [ x"$2" = xup ]; then
 
 
 	# Still does not exist
-	if ! grep "${IF_NAME%%:*}:" /proc/net/dev >/dev/null; then
+	if ! grep -q "${IF_NAME%%:*}:" /proc/net/dev; then
 		if [ x"$DEBUG_UP" = xyes ]; then
 			echo "base($1):  $IF_NAME interface does not exist (yet)" >&2
 		fi
@@ -22,8 +22,8 @@ if [ x"$2" = xup ]; then
 
 
 	# Already up
-	if /sbin/ifconfig | grep -w "$IF_NAME" 1>/dev/null && \
-		/sbin/ifconfig "$IF_NAME" | grep "inet addr" >/dev/null; then
+	if /sbin/ifconfig | grep -qw "$IF_NAME" && \
+		/sbin/ifconfig "$IF_NAME" | grep -q "inet addr"; then
 		if [ x"$DEBUG_UP" = xyes ]; then
 			echo "base($1):  $IF_NAME is already up, skipping" >&2
 		fi
